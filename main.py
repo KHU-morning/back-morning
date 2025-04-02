@@ -3,6 +3,10 @@ from pydantic import BaseModel
 from pymongo import MongoClient
 from passlib.context import CryptContext
 from fastapi import Query
+from pydantic import BaseModel
+from uuid import uuid4
+from datetime import datetime
+
 
 # 1. 앱 객체 생성
 app = FastAPI()
@@ -11,6 +15,7 @@ app = FastAPI()
 client = MongoClient("mongodb+srv://jegalhhh:1234@morning-cluster.rjlkphg.mongodb.net/?retryWrites=true&w=majority&appName=morning-cluster")
 db = client["morning_db"]
 users_collection = db["users"]
+rooms_collection = db["morning_rooms"]
 
 # 3. 비밀번호 암호화 설정
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
@@ -27,6 +32,16 @@ class UserSignup(BaseModel):
 class UserLogin(BaseModel):
     username: str
     password: str
+
+# 모닝방 생성용 DB 생성성
+
+class RoomCreate(BaseModel):
+    created_by: str
+    title: str
+    goal: str
+    wake_date: str  # "2025-04-07"
+    wake_time: str  # "08:30"
+    is_private: bool
 
 # 5. 회원가입 API
 @app.post("/signup")
@@ -54,6 +69,7 @@ def login(user: UserLogin):
     return {"msg": "로그인 성공!"}
 
 # 7. 마이페이지 api
+# 아이디, 평판, 프로필 사진, 학과 정보를 가져옵니다.
 @app.get("/me")
 def get_my_profile(username: str = Query(...)):
     user = users_collection.find_one({"username": username})
@@ -67,3 +83,18 @@ def get_my_profile(username: str = Query(...)):
         "reputation": user.get("reputation", 0),
         "profile_image": user.get("profile_image", "")
     }
+
+
+# 7. 모닝방 생성 api
+@app.post("/rooms")
+def create_room(room: RoomCreate):
+    room_id = str(uuid4())[:8]  # 방 ID는 짧게 생성
+    room_data = room.dict()
+    room_data.update({
+        "room_id": room_id,
+        "created_at": datetime.utcnow().isoformat(),
+        "participants": [room.created_by]
+    })
+
+    rooms_collection.insert_one(room_data)
+    return {"msg": "모닝방이 생성되었습니다!", "room_id": room_id}
