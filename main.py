@@ -4,10 +4,9 @@ from pymongo import MongoClient
 from passlib.context import CryptContext
 from pydantic import BaseModel
 from uuid import uuid4
-from datetime import datetime
 from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm
 from jose import JWTError, jwt
-from datetime import timedelta
+from datetime import datetime, timedelta
 
 
 
@@ -177,14 +176,32 @@ def get_room_detail(room_id: str = Path(...)):
     if not room:
         raise HTTPException(status_code=404, detail="모닝방을 찾을 수 없습니다.")
 
+    # 현재 시간과 기상 시간 계산
+    now = datetime.utcnow()
+    try:
+        target_dt = datetime.strptime(f"{room['wake_date']} {room['wake_time']}", "%Y-%m-%d %H:%M")
+        diff = target_dt - now
+        minutes_left = int(diff.total_seconds() // 60)
+
+        if minutes_left > 0:
+            time_left = f"{minutes_left}분 후"
+        elif -10 <= minutes_left <= 0:
+            time_left = "기상 시간!"
+        else:
+            time_left = "기상 시간 지남"
+    except:
+        time_left = "시간 계산 오류"
+
     return {
         "room_id": room["room_id"],
         "title": room["title"],
         "created_by": room["created_by"],
         "wake_date": room["wake_date"],
         "wake_time": room["wake_time"],
-        "is_private": room["is_private"]
+        "is_private": room["is_private"],
+        "time_left": time_left  # ⏱ 기상까지 남은 시간
     }
+
 
 # 모닝방 참여하기 API (로그인 필요)
 # 로그인한 사용자가 특정 room_id의 모닝방에 참여 (중복 참여 방지)
