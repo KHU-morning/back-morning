@@ -43,6 +43,10 @@ class RoomCreate(BaseModel):
     wake_time: str  # "08:30"
     is_private: bool
 
+# 모닝방 참여 리스트
+class JoinRoomRequest(BaseModel):
+    username: str
+
 # 5. 회원가입 API
 @app.post("/signup")
 def signup(user: UserSignup):
@@ -117,7 +121,7 @@ def list_public_rooms():
     return result
 
 
-# 10. 모닝방 공개 리스트 방 정보 api
+# 10. 모닝방 상세 정보 표시 api
 @app.get("/rooms/{room_id}")
 def get_room_detail(room_id: str = Path(...)):
     room = rooms_collection.find_one({"room_id": room_id})
@@ -132,3 +136,23 @@ def get_room_detail(room_id: str = Path(...)):
         "wake_time": room["wake_time"],
         "is_private": room["is_private"]
     }
+
+# 11. 모닝방 참여하기 및 참여자 등록 api
+@app.post("/rooms/{room_id}/join")
+def join_room(room_id: str, request: JoinRoomRequest):
+    room = rooms_collection.find_one({"room_id": room_id})
+    if not room:
+        raise HTTPException(status_code=404, detail="모닝방을 찾을 수 없습니다.")
+
+    # 이미 참여한 유저인지 확인
+    if request.username in room.get("participants", []):
+        return {"msg": "이미 참여한 사용자입니다.", "participants": room["participants"]}
+
+    # 참가자 배열에 추가
+    rooms_collection.update_one(
+        {"room_id": room_id},
+        {"$push": {"participants": request.username}}
+    )
+
+    updated_room = rooms_collection.find_one({"room_id": room_id})
+    return {"msg": "참여 완료!", "participants": updated_room["participants"]}
