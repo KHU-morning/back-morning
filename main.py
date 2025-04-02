@@ -7,10 +7,18 @@ from pydantic import BaseModel
 from uuid import uuid4
 from datetime import datetime
 from fastapi import Path
+from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm
+from jose import JWTError, jwt
+from datetime import timedelta
 
 
 # 1. 앱 객체 생성
 app = FastAPI()
+SECRET_KEY = "super-secret-kyunghee-morning123!"  # 실제 서비스에서는 환경변수로 관리
+ALGORITHM = "HS256"
+ACCESS_TOKEN_EXPIRE_MINUTES = 60
+oauth2_scheme = OAuth2PasswordBearer(tokenUrl="token")
+pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 
 # 2. DB 연결
 client = MongoClient("mongodb+srv://jegalhhh:1234@morning-cluster.rjlkphg.mongodb.net/?retryWrites=true&w=majority&appName=morning-cluster")
@@ -18,8 +26,36 @@ db = client["morning_db"]
 users_collection = db["users"]
 rooms_collection = db["morning_rooms"]
 
-# 3. 비밀번호 암호화 설정
-pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
+
+def create_access_token(data: dict, expires_delta: timedelta = None):
+    to_encode = data.copy()
+    if expires_delta:
+        expire = datetime.utcnow() + expires_delta
+    else:
+        expire = datetime.utcnow() + timedelta(minutes=15)
+
+    to_encode.update({"exp": expire})
+    encoded_jwt = jwt.encode(to_encode, SECRET_KEY, algorithm=ALGORITHM)
+    return encoded_jwt
+
+async def get_current_user(token: str = Depends(oauth2_scheme)):
+    credentials_exception = HTTPException(
+        status_code=401,
+        detail="인증 정보가 유효하지 않습니다.",
+    )
+    try:
+        payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
+        username: str = payload.get("sub")
+        if username is None:
+            raise credentials_exception
+    except JWTError:
+        raise credentials_exception
+
+    user = users_collection.find_one({"username": username})
+    if user is None:
+        raise credentials_exception
+
+    return user
 
 # 4. 모델 정의
 class UserSignup(BaseModel):
@@ -59,6 +95,18 @@ def signup(user: UserSignup):
     users_collection.insert_one(user_dict)
 
     return {"msg": "회원가입 성공!"}
+
+@app.post("/token")
+def login_for_access_token(form_data: OAuth2PasswordRequestForm = Depends()):
+    user = users_collection.find_one({"username": form_data.username})
+    if not user or not pwd_context.verify(form_data.password, user["password"]):
+        raise HTTPException(status_code=401, detail="아이디 또는 비밀번호 오류")
+
+    access_token = create_access_token(
+        data={"sub": user["username"]},
+        expires_delta=timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
+    )
+    return {"access_token": access_token, "token_type": "bearer"}
 
 # 6. 로그인 API
 @app.post("/login")
