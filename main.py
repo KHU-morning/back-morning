@@ -7,6 +7,9 @@ from uuid import uuid4
 from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm
 from jose import JWTError, jwt
 from datetime import datetime, timedelta
+from fastapi import WebSocket, WebSocketDisconnect
+from fastapi.encoders import jsonable_encoder
+import json
 
 
 
@@ -84,6 +87,15 @@ class RoomCreate(BaseModel):
     wake_date: str  # "2025-04-07"
     wake_time: str  # "08:30"
     is_private: bool
+
+# 모닝방 채팅용
+class ChatMessage(BaseModel):
+    type: str  # "chat"
+    username: str
+    name: str
+    message: str
+    timestamp: str
+
 
 # (현재 미사용) 모닝방 참여 요청용
 class JoinRoomRequest(BaseModel):
@@ -237,3 +249,60 @@ def join_room(room_id: str, user: dict = Depends(get_current_user)):
 
     updated_room = rooms_collection.find_one({"room_id": room_id})
     return {"msg": "참여 완료!", "participants": updated_room["participants"]}
+
+
+# 방별 연결 사용자 저장소
+room_connections = {}
+
+class ConnectionManager:
+    def __init__(self):
+        self.active_connections: dict[str, list[WebSocket]] = {}
+
+    async def connect(self, room_id: str, websocket: WebSocket):
+        await websocket.accept()
+        if room_id not in self.active_connections:
+            self.active_connections[room_id] = []
+        self.active_connections[room_id].append(websocket)
+
+    async def disconnect(self, room_id: str, websocket: WebSocket):
+        self.active_connections[room_id].remove(websocket)
+
+    async def broadcast(self, room_id: str, message: str):
+        for connection in self.active_connections.get(room_id, []):
+            await connection.send_text(message)
+
+
+manager = ConnectionManager()
+
+@app.websocket("/ws/{room_id}")
+async def websocket_endpoint(websocket: WebSocket, room_id: str):
+    await manager.connect(room_id, websocket)
+
+    # 👉 입장 메시지 전송
+    join_msg = {
+        "type": "system",
+        "message": "누군가 입장했습니다 👋",
+        "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M")
+    }
+    await manager.broadcast(room_id, json.dumps(join_msg))
+
+    try:
+        while True:
+            raw_data = await websocket.receive_text()
+            data = json.loads(raw_data)
+
+            # ⏱ timestamp 추가
+            data["timestamp"] = datetime.now().strftime("%Y-%m-%d %H:%M")
+
+            await manager.broadcast(room_id, json.dumps(data))
+
+    except WebSocketDisconnect:
+        manager.disconnect(room_id, websocket)
+
+        # 👉 퇴장 메시지 전송
+        leave_msg = {
+            "type": "system",
+            "message": "누군가 퇴장했습니다 👋",
+            "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M")
+        }
+        await manager.broadcast(room_id, json.dumps(leave_msg))
