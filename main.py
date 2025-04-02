@@ -38,7 +38,6 @@ class UserLogin(BaseModel):
 class RoomCreate(BaseModel):
     created_by: str
     title: str
-    goal: str
     wake_date: str  # "2025-04-07"
     wake_time: str  # "08:30"
     is_private: bool
@@ -98,3 +97,20 @@ def create_room(room: RoomCreate):
 
     rooms_collection.insert_one(room_data)
     return {"msg": "모닝방이 생성되었습니다!", "room_id": room_id}
+
+# 8. 모닝방 공개 리스트 api
+@app.get("/rooms")
+def list_public_rooms():
+    rooms = list(rooms_collection.find({"is_private": False}).sort("wake_date", 1))
+    
+    result = []
+    for room in rooms:
+        result.append({
+            "room_id": room["room_id"],
+            "title": room["title"],  
+            "created_by": room["created_by"],
+            "wake_date": room["wake_date"],
+            "wake_time": room["wake_time"]
+        })
+
+    return result
