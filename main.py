@@ -176,7 +176,7 @@ def get_room_detail(room_id: str = Path(...)):
     if not room:
         raise HTTPException(status_code=404, detail="모닝방을 찾을 수 없습니다.")
 
-    # 현재 시간과 기상 시간 계산
+    # ⏱ 기상 시간 계산 (이전 코드 그대로 유지)
     now = datetime.utcnow()
     try:
         target_dt = datetime.strptime(f"{room['wake_date']} {room['wake_time']}", "%Y-%m-%d %H:%M")
@@ -192,6 +192,18 @@ def get_room_detail(room_id: str = Path(...)):
     except:
         time_left = "시간 계산 오류"
 
+    # 👥 참가자 상세 정보 가져오기
+    participant_infos = []
+    for username in room.get("participants", []):
+        user = users_collection.find_one({"username": username})
+        if user:
+            participant_infos.append({
+                "username": user["username"],
+                "name": user["name"],
+                "department": user["department"],
+                "profile_image": user.get("profile_image", "")
+            })
+
     return {
         "room_id": room["room_id"],
         "title": room["title"],
@@ -199,8 +211,10 @@ def get_room_detail(room_id: str = Path(...)):
         "wake_date": room["wake_date"],
         "wake_time": room["wake_time"],
         "is_private": room["is_private"],
-        "time_left": time_left  # ⏱ 기상까지 남은 시간
+        "time_left": time_left,
+        "participants": participant_infos 
     }
+
 
 
 # 모닝방 참여하기 API (로그인 필요)
