@@ -2,6 +2,7 @@ from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 from pymongo import MongoClient
 from passlib.context import CryptContext
+from fastapi import Query
 
 # 1. 앱 객체 생성
 app = FastAPI()
@@ -51,3 +52,18 @@ def login(user: UserLogin):
         raise HTTPException(status_code=401, detail="비밀번호가 틀렸습니다.")
 
     return {"msg": "로그인 성공!"}
+
+# 7. 마이페이지 api
+@app.get("/me")
+def get_my_profile(username: str = Query(...)):
+    user = users_collection.find_one({"username": username})
+    if not user:
+        raise HTTPException(status_code=404, detail="해당 유저를 찾을 수 없습니다.")
+
+    return {
+        "username": user["username"],
+        "name": user["name"],
+        "department": user["department"],
+        "reputation": user.get("reputation", 0),
+        "profile_image": user.get("profile_image", "")
+    }
