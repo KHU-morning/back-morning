@@ -6,6 +6,7 @@ from fastapi import Query
 from pydantic import BaseModel
 from uuid import uuid4
 from datetime import datetime
+from fastapi import Path
 
 
 # 1. 앱 객체 생성
@@ -84,7 +85,7 @@ def get_my_profile(username: str = Query(...)):
     }
 
 
-# 7. 모닝방 생성 api
+# 8. 모닝방 생성 api
 @app.post("/rooms")
 def create_room(room: RoomCreate):
     room_id = str(uuid4())[:8]  # 방 ID는 짧게 생성
@@ -98,7 +99,7 @@ def create_room(room: RoomCreate):
     rooms_collection.insert_one(room_data)
     return {"msg": "모닝방이 생성되었습니다!", "room_id": room_id}
 
-# 8. 모닝방 공개 리스트 api
+# 9. 모닝방 공개 리스트 api
 @app.get("/rooms")
 def list_public_rooms():
     rooms = list(rooms_collection.find({"is_private": False}).sort("wake_date", 1))
@@ -114,3 +115,20 @@ def list_public_rooms():
         })
 
     return result
+
+
+# 10. 모닝방 공개 리스트 방 정보 api
+@app.get("/rooms/{room_id}")
+def get_room_detail(room_id: str = Path(...)):
+    room = rooms_collection.find_one({"room_id": room_id})
+    if not room:
+        raise HTTPException(status_code=404, detail="모닝방을 찾을 수 없습니다.")
+
+    return {
+        "room_id": room["room_id"],
+        "title": room["title"],
+        "created_by": room["created_by"],
+        "wake_date": room["wake_date"],
+        "wake_time": room["wake_time"],
+        "is_private": room["is_private"]
+    }
