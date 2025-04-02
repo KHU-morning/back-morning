@@ -1,32 +1,39 @@
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Depends, Path, Query
 from pydantic import BaseModel
 from pymongo import MongoClient
 from passlib.context import CryptContext
-from fastapi import Query
 from pydantic import BaseModel
 from uuid import uuid4
 from datetime import datetime
-from fastapi import Path
 from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm
 from jose import JWTError, jwt
 from datetime import timedelta
 
 
-# 1. 앱 객체 생성
+
+# 앱 생성
 app = FastAPI()
+
+# JWT 관련 상수 및 암호화 설정
 SECRET_KEY = "super-secret-kyunghee-morning123!"  # 실제 서비스에서는 환경변수로 관리
 ALGORITHM = "HS256"
 ACCESS_TOKEN_EXPIRE_MINUTES = 60
+
+# OAuth2 설정 
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="token")
+
+# 비밀번호 암호화 설정
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 
-# 2. DB 연결
+# MongoDB Atlas 클러스터 연결
 client = MongoClient("mongodb+srv://jegalhhh:1234@morning-cluster.rjlkphg.mongodb.net/?retryWrites=true&w=majority&appName=morning-cluster")
 db = client["morning_db"]
+
+# 컬렉션 정의
 users_collection = db["users"]
 rooms_collection = db["morning_rooms"]
 
-
+# JWT 토큰 생성 함수
 def create_access_token(data: dict, expires_delta: timedelta = None):
     to_encode = data.copy()
     if expires_delta:
@@ -38,6 +45,7 @@ def create_access_token(data: dict, expires_delta: timedelta = None):
     encoded_jwt = jwt.encode(to_encode, SECRET_KEY, algorithm=ALGORITHM)
     return encoded_jwt
 
+# access_token으로 현재 로그인한 사용자 정보를 가져오는 함수
 async def get_current_user(token: str = Depends(oauth2_scheme)):
     credentials_exception = HTTPException(
         status_code=401,
@@ -57,7 +65,7 @@ async def get_current_user(token: str = Depends(oauth2_scheme)):
 
     return user
 
-# 4. 모델 정의
+# 회원가입 요청용
 class UserSignup(BaseModel):
     phone: str
     name: str
@@ -66,24 +74,24 @@ class UserSignup(BaseModel):
     username: str
     password: str
 
+# 로그인 요청용 (현재 미사용, Swagger 내 form 방식으로 대체)
 class UserLogin(BaseModel):
     username: str
     password: str
 
-# 모닝방 생성용 DB 생성성
-
+# 모닝방 생성 요청용
 class RoomCreate(BaseModel):
-    created_by: str
     title: str
     wake_date: str  # "2025-04-07"
     wake_time: str  # "08:30"
     is_private: bool
 
-# 모닝방 참여 리스트
+# (현재 미사용) 모닝방 참여 요청용
 class JoinRoomRequest(BaseModel):
     username: str
 
-# 5. 회원가입 API
+# 회원가입 API
+# 회원가입 정보 (username, password 등)를 받아 DB에 저장
 @app.post("/signup")
 def signup(user: UserSignup):
     if users_collection.find_one({"username": user.username}):
@@ -96,6 +104,8 @@ def signup(user: UserSignup):
 
     return {"msg": "회원가입 성공!"}
 
+# JWT 토큰 발급용 로그인 API
+# 클라이언트는 이 API를 통해 access_token을 발급받아야 함
 @app.post("/token")
 def login_for_access_token(form_data: OAuth2PasswordRequestForm = Depends()):
     user = users_collection.find_one({"username": form_data.username})
@@ -108,26 +118,11 @@ def login_for_access_token(form_data: OAuth2PasswordRequestForm = Depends()):
     )
     return {"access_token": access_token, "token_type": "bearer"}
 
-# 6. 로그인 API
-@app.post("/login")
-def login(user: UserLogin):
-    found = users_collection.find_one({"username": user.username})
-    if not found:
-        raise HTTPException(status_code=404, detail="존재하지 않는 아이디입니다.")
 
-    if not pwd_context.verify(user.password, found["password"]):
-        raise HTTPException(status_code=401, detail="비밀번호가 틀렸습니다.")
-
-    return {"msg": "로그인 성공!"}
-
-# 7. 마이페이지 api
-# 아이디, 평판, 프로필 사진, 학과 정보를 가져옵니다.
+# 마이페이지 조회 API (로그인 필요)
+# access_token으로 로그인한 사용자의 정보(username, 학과, 평판, 프로필사진 등)를 반환
 @app.get("/me")
-def get_my_profile(username: str = Query(...)):
-    user = users_collection.find_one({"username": username})
-    if not user:
-        raise HTTPException(status_code=404, detail="해당 유저를 찾을 수 없습니다.")
-
+def get_my_profile(user: dict = Depends(get_current_user)):
     return {
         "username": user["username"],
         "name": user["name"],
@@ -137,21 +132,26 @@ def get_my_profile(username: str = Query(...)):
     }
 
 
-# 8. 모닝방 생성 api
+
+# 모닝방 생성 API (로그인 필요)
+# 로그인한 사용자가 모닝방을 생성함. 방 제목, 날짜, 시간, 공개 여부 입력
 @app.post("/rooms")
-def create_room(room: RoomCreate):
-    room_id = str(uuid4())[:8]  # 방 ID는 짧게 생성
+def create_room(room: RoomCreate, user: dict = Depends(get_current_user)):
+    room_id = str(uuid4())[:8]
     room_data = room.dict()
     room_data.update({
         "room_id": room_id,
         "created_at": datetime.utcnow().isoformat(),
-        "participants": [room.created_by]
+        "created_by": user["username"],  
+        "participants": [user["username"]]
     })
 
     rooms_collection.insert_one(room_data)
     return {"msg": "모닝방이 생성되었습니다!", "room_id": room_id}
 
-# 9. 모닝방 공개 리스트 api
+
+# 공개된 모닝방 리스트 조회 API (로그인 불필요)
+# 공개방만 정렬하여 리스트로 반환.
 @app.get("/rooms")
 def list_public_rooms():
     rooms = list(rooms_collection.find({"is_private": False}).sort("wake_date", 1))
@@ -169,7 +169,8 @@ def list_public_rooms():
     return result
 
 
-# 10. 모닝방 상세 정보 표시 api
+# 모닝방 상세 정보 조회 API (로그인 불필요)
+# room_id를 통해 방 상세 정보 확인
 @app.get("/rooms/{room_id}")
 def get_room_detail(room_id: str = Path(...)):
     room = rooms_collection.find_one({"room_id": room_id})
@@ -185,21 +186,22 @@ def get_room_detail(room_id: str = Path(...)):
         "is_private": room["is_private"]
     }
 
-# 11. 모닝방 참여하기 및 참여자 등록 api
+# 모닝방 참여하기 API (로그인 필요)
+# 로그인한 사용자가 특정 room_id의 모닝방에 참여 (중복 참여 방지)
 @app.post("/rooms/{room_id}/join")
-def join_room(room_id: str, request: JoinRoomRequest):
+def join_room(room_id: str, user: dict = Depends(get_current_user)):
     room = rooms_collection.find_one({"room_id": room_id})
     if not room:
         raise HTTPException(status_code=404, detail="모닝방을 찾을 수 없습니다.")
 
-    # 이미 참여한 유저인지 확인
-    if request.username in room.get("participants", []):
+    username = user["username"]
+
+    if username in room.get("participants", []):
         return {"msg": "이미 참여한 사용자입니다.", "participants": room["participants"]}
 
-    # 참가자 배열에 추가
     rooms_collection.update_one(
         {"room_id": room_id},
-        {"$push": {"participants": request.username}}
+        {"$push": {"participants": username}}
     )
 
     updated_room = rooms_collection.find_one({"room_id": room_id})
