@@ -469,3 +469,31 @@ def accept_wake_request(request_id: str, user: dict = Depends(get_current_user))
     )
 
     return {"msg": "모닝콜 요청을 수락했습니다!"}
+
+# 내가 요청하거나 수락한 모닝콜 상세정보 API
+@app.get("/wake-requests/{request_id}")
+def get_wake_request_detail(request_id: str, user: dict = Depends(get_current_user)):
+    req = wake_requests_collection.find_one({"request_id": request_id})
+    if not req:
+        raise HTTPException(status_code=404, detail="요청을 찾을 수 없습니다.")
+
+    # 요청자 또는 수락자만 접근 가능
+    if req["requester"] != user["username"] and req.get("accepted_by") != user["username"]:
+        raise HTTPException(status_code=403, detail="해당 요청에 접근할 수 없습니다.")
+
+    # 기상 대상 정보 가져오기 (무조건 requester)
+    target_user = users_collection.find_one({"username": req["requester"]})
+    target_info = {
+        "username": target_user["username"],
+        "name": target_user["name"],
+        "profile_image": target_user.get("profile_image", "")
+    } if target_user else None
+
+    return {
+        "wake_date": req["wake_date"],
+        "wake_time": req["wake_time"],
+        "status": req["status"],
+        "reason": req["reason"],
+        "target": target_info,  # 👈 프론트에선 "기상 대상"으로 사용
+        "you_are_helper": user["username"] == req.get("accepted_by")
+    }
