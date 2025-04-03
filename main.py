@@ -650,3 +650,56 @@ def remove_friend(
     )
 
     return {"msg": f"{friend_username}님을 친구 목록에서 제거했습니다."}
+
+
+# 친구 프로필 조회 API
+@app.get("/users/{username}")
+def get_user_profile(username: str, user: dict = Depends(get_current_user)):
+    target = users_collection.find_one({"username": username})
+    if not target:
+        raise HTTPException(status_code=404, detail="유저를 찾을 수 없습니다.")
+
+    # 내가 친구인지 확인
+    is_friend = username in user.get("friends", [])
+
+    return {
+        "username": target["username"],
+        "name": target["name"],
+        "department": target["department"],
+        "reputation": target.get("reputation", 0),
+        "profile_image": target.get("profile_image", ""),
+        "is_friend": is_friend  # 👉 프론트에서 친구 삭제 버튼 표시 여부 판단 가능
+    }
+
+# 친구 프로필 달력 색칠 API
+@app.get("/users/{username}/wake-records")
+def get_user_wake_summary(username: str):
+    target = users_collection.find_one({"username": username})
+    if not target:
+        raise HTTPException(status_code=404, detail="해당 유저를 찾을 수 없습니다.")
+
+    records = list(wake_records_collection.find({"username": username}))
+    return [
+        {"date": rec["date"], "success": rec["success"]}
+        for rec in records
+    ]
+
+# 친구 프로필 통계 API
+@app.get("/users/{username}/wake-record/{date}")
+def get_user_wake_detail(username: str, date: str):
+    target = users_collection.find_one({"username": username})
+    if not target:
+        raise HTTPException(status_code=404, detail="해당 유저를 찾을 수 없습니다.")
+
+    record = wake_records_collection.find_one({"username": username, "date": date})
+    if not record:
+        raise HTTPException(status_code=404, detail="기상 기록이 없습니다.")
+
+    return {
+        "date": record["date"],
+        "success": record["success"],
+        "type": record["type"],
+        "wake_time": record["wake_time"],
+        "reason": record["reason"],
+        "participants": record.get("participants", [])
+    }
