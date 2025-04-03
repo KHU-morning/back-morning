@@ -12,6 +12,7 @@ from fastapi.encoders import jsonable_encoder
 import json
 from typing import List
 import pytz
+from agora_token_builder import RtcTokenBuilder
 
 
 # 앱 생성
@@ -37,6 +38,8 @@ users_collection = db["users"]
 rooms_collection = db["morning_rooms"]
 wake_records_collection = db["wake_records"]
 wake_requests_collection = db["wake_requests"]
+ratings_collection = db["wake_ratings"]
+
 
 
 # JWT 토큰 생성 함수
@@ -133,7 +136,11 @@ class WakeRequest(BaseModel):
     status: str = "open"  # open, accepted, done
     created_at: str
 
-
+# 평가 요청 모델
+class RatingRequest(BaseModel):
+    request_id: str  # 평가할 모닝콜 요청 ID
+    to: str          # 평가 대상 유저 username
+    result: str      # "like" or "dislike"
 
 # 회원가입 API
 # 회원가입 정보 (username, password 등)를 받아 DB에 저장
@@ -550,3 +557,67 @@ def record_wake_result(
         "msg": "기상 기록 저장 완료!",
         "success": success
     }
+
+
+
+# Agora 설정 (환경변수로 빼도 좋음)
+AGORA_APP_ID = "154f7e38672c4cc2b51520502ace336f"
+AGORA_APP_CERTIFICATE = "9ce097af561b44b2a571d632416ad008"
+
+# Agora Token 발급 API
+@app.get("/agora/token")
+def get_agora_token(channel_name: str, user_id: int, user: dict = Depends(get_current_user)):
+    expire_time_seconds = 3600  # 토큰 유효시간: 1시간
+    current_timestamp = int(datetime.utcnow().timestamp())
+    privilege_expired_ts = current_timestamp + expire_time_seconds
+
+    token = RtcTokenBuilder.buildTokenWithUid(
+        AGORA_APP_ID,
+        AGORA_APP_CERTIFICATE,
+        channel_name,
+        user_id,  # 반드시 int
+        1,  # Role: publisher
+        privilege_expired_ts
+    )
+
+    return {
+        "appId": AGORA_APP_ID,
+        "channelName": channel_name,
+        "uid": user_id,
+        "token": token
+    }
+
+
+# 평판 평가 API
+@app.post("/rate")
+def rate_user(rating: RatingRequest, user: dict = Depends(get_current_user)):
+    from_username = user["username"]
+    to_username = rating.to
+
+    # 중복 평가 방지
+    existing = ratings_collection.find_one({
+        "request_id": rating.request_id,
+        "from": from_username
+    })
+
+    if existing:
+        raise HTTPException(400, "이미 평가한 요청입니다.")
+
+    # 평판 점수 반영
+    delta = 1 if rating.result == "like" else -1
+
+    users_collection.update_one(
+        {"username": to_username},
+        {"$inc": {"reputation": delta}}
+    )
+
+    # 평가 기록 저장
+    ratings_collection.insert_one({
+        "request_id": rating.request_id,
+        "from": from_username,
+        "to": to_username,
+        "result": rating.result,
+        "timestamp": datetime.now().isoformat()
+    })
+
+    return {"msg": "평가 완료!"}
