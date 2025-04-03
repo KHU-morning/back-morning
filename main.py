@@ -1,4 +1,4 @@
-from fastapi import FastAPI, HTTPException, Depends, Path, Query, Body
+from fastapi import FastAPI, HTTPException, Depends, Path, Query, Body, BackgroundTasks
 from pydantic import BaseModel
 from pymongo import MongoClient
 from passlib.context import CryptContext
@@ -13,6 +13,9 @@ import json
 from typing import List
 import pytz
 from agora_token_builder import RtcTokenBuilder
+from threading import Timer
+
+
 
 # 앱 생성
 app = FastAPI()
@@ -102,10 +105,10 @@ class ChatMessage(BaseModel):
     message: str
     timestamp: str
 
+class InviteRequest(BaseModel):
+    room_id: str
+    friends: List[str]  # 초대할 친구 username 리스트
 
-# (현재 미사용) 모닝방 참여 요청용
-class JoinRoomRequest(BaseModel):
-    username: str
 
 # 마이페이지 기상 기록
 class WakeRecord(BaseModel):
@@ -228,24 +231,29 @@ def get_room_detail(room_id: str = Path(...)):
     if not room:
         raise HTTPException(status_code=404, detail="모닝방을 찾을 수 없습니다.")
 
-    # ⏱ 기상 시간 계산 (이전 코드 그대로 유지)
+    wake_date = room["wake_date"]
+    wake_time = room["wake_time"]
+
+    # ✅ 남은 시간 계산 (초 단위 → 분+초)
     kst = pytz.timezone("Asia/Seoul")
     now = datetime.now(kst)
     try:
-        target_dt = kst.localize(datetime.strptime(f"{room['wake_date']} {room['wake_time']}", "%Y-%m-%d %H:%M"))
+        target_dt = kst.localize(datetime.strptime(f"{wake_date} {wake_time}", "%Y-%m-%d %H:%M"))
         diff = target_dt - now
-        minutes_left = int(diff.total_seconds() // 60)
+        seconds_left = int(diff.total_seconds())
 
-        if minutes_left > 0:
-            time_left = f"{minutes_left}분 후"
-        elif -10 <= minutes_left <= 0:
+        if seconds_left > 0:
+            minutes = seconds_left // 60
+            seconds = seconds_left % 60
+            time_left = f"{minutes}분 {seconds}초 후"
+        elif -600 <= seconds_left <= 0:
             time_left = "기상 시간!"
         else:
             time_left = "기상 시간 지남"
     except:
         time_left = "시간 계산 오류"
 
-    # 👥 참가자 상세 정보 가져오기
+    # 참가자 정보
     participant_infos = []
     for username in room.get("participants", []):
         user = users_collection.find_one({"username": username})
@@ -261,12 +269,14 @@ def get_room_detail(room_id: str = Path(...)):
         "room_id": room["room_id"],
         "title": room["title"],
         "created_by": room["created_by"],
-        "wake_date": room["wake_date"],
-        "wake_time": room["wake_time"],
+        "wake_date": wake_date,
+        "wake_time": wake_time,
         "is_private": room["is_private"],
-        "time_left": time_left,
-        "participants": participant_infos 
+        "time_left": time_left,  # 👈 추가됨
+        "participants": participant_infos
     }
+
+
 
 
 
@@ -309,6 +319,14 @@ class ConnectionManager:
 
     async def broadcast(self, room_id: str, message: str):
         for connection in self.active_connections.get(room_id, []):
+            await connection.send_text(message)
+
+    # 특정 유저가 아닌, 전체 모닝방 사용자에게 시스템 메시지 전송
+    async def send_system_message(self, room_id: str, data: dict):
+        if room_id not in self.active_connections:
+            return
+        message = json.dumps(data)
+        for connection in self.active_connections[room_id]:
             await connection.send_text(message)
 
 
@@ -483,11 +501,31 @@ def get_wake_request_detail(request_id: str, user: dict = Depends(get_current_us
     if not req:
         raise HTTPException(status_code=404, detail="요청을 찾을 수 없습니다.")
 
-    # 요청자 또는 수락자만 접근 가능
     if req["requester"] != user["username"] and req.get("accepted_by") != user["username"]:
         raise HTTPException(status_code=403, detail="해당 요청에 접근할 수 없습니다.")
 
-    # 기상 대상 정보 가져오기 (무조건 requester)
+    wake_date = req["wake_date"]
+    wake_time = req["wake_time"]
+
+    # ✅ 남은 시간 계산 (초 단위 → 분+초)
+    kst = pytz.timezone("Asia/Seoul")
+    now = datetime.now(kst)
+    try:
+        target_dt = kst.localize(datetime.strptime(f"{wake_date} {wake_time}", "%Y-%m-%d %H:%M"))
+        diff = target_dt - now
+        seconds_left = int(diff.total_seconds())
+
+        if seconds_left > 0:
+            minutes = seconds_left // 60
+            seconds = seconds_left % 60
+            time_left = f"{minutes}분 {seconds}초 후"
+        elif -600 <= seconds_left <= 0:
+            time_left = "기상 시간!"
+        else:
+            time_left = "기상 시간 지남"
+    except:
+        time_left = "시간 계산 오류"
+
     target_user = users_collection.find_one({"username": req["requester"]})
     target_info = {
         "username": target_user["username"],
@@ -496,13 +534,15 @@ def get_wake_request_detail(request_id: str, user: dict = Depends(get_current_us
     } if target_user else None
 
     return {
-        "wake_date": req["wake_date"],
-        "wake_time": req["wake_time"],
+        "wake_date": wake_date,
+        "wake_time": wake_time,
         "status": req["status"],
         "reason": req["reason"],
-        "target": target_info,  # 👈 프론트에선 "기상 대상"으로 사용
-        "you_are_helper": user["username"] == req.get("accepted_by")
+        "target": target_info,
+        "you_are_helper": user["username"] == req.get("accepted_by"),
+        "time_left": time_left  # 👈 추가됨
     }
+
 
 
 # 전화 성공 실패 여부 저장 API
@@ -703,3 +743,148 @@ def get_user_wake_detail(username: str, date: str):
         "reason": record["reason"],
         "participants": record.get("participants", [])
     }
+
+#모닝방 친구 초대 기능
+@app.post("/rooms/invite")
+def invite_friends_to_room(invite: InviteRequest, user: dict = Depends(get_current_user)):
+    room = rooms_collection.find_one({"room_id": invite.room_id})
+    if not room:
+        raise HTTPException(status_code=404, detail="모닝방을 찾을 수 없습니다.")
+
+    if user["username"] not in room["participants"]:
+        raise HTTPException(status_code=403, detail="참여 중인 사용자만 초대할 수 있습니다.")
+
+    # 이미 참가중인 인원 제외
+    new_friends = [f for f in invite.friends if f not in room.get("participants", [])]
+
+    if not new_friends:
+        return {"msg": "이미 모두 참여 중입니다."}
+
+    rooms_collection.update_one(
+        {"room_id": invite.room_id},
+        {"$push": {"participants": {"$each": new_friends}}}
+    )
+
+    return {"msg": f"{len(new_friends)}명 초대 완료!", "invited": new_friends}
+
+
+
+#모닝방 단체 알람 
+#프론트 앱에서 모닝방 데이터를 보고 타이머(setTimeout) 걸어놓고 시간되면 /rooms/{room_id}/wake-up 호출
+@app.post("/rooms/{room_id}/wake-up")
+async def notify_room_wake_up(room_id: str, user: dict = Depends(get_current_user)):
+    room = rooms_collection.find_one({"room_id": room_id})
+    
+    # WebSocket으로 시스템 메시지 전송
+    await manager.send_system_message(
+        room_id,
+        {
+            "type": "wake_up_start",     # 프론트에서 이 타입을 감지해 UI 전환
+            "message": "기상 시간이 되었습니다! 지금 참여해주세요!",
+            "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        }
+    )
+
+    return {"msg": "기상 알림 메시지 전송 완료!"}
+
+
+
+
+# 🔄 현재 음성채팅방 참여자 저장용 (메모리 기반)
+active_agora_users = {}
+
+# 🔘 Agora 음성채팅 입장 기록 API
+@app.post("/rooms/{room_id}/agora-join")
+def join_agora_channel(room_id: str, user: dict = Depends(get_current_user)):
+    if room_id not in active_agora_users:
+        active_agora_users[room_id] = set()
+
+    active_agora_users[room_id].add(user["username"])
+    return {"msg": "Agora 음성채팅 입장 기록 완료"}
+
+# 👁 Agora 현재 참여자 리스트 조회 API
+@app.get("/rooms/{room_id}/agora-participants")
+def get_agora_participants(room_id: str):
+    usernames = list(active_agora_users.get(room_id, []))
+
+    users = list(users_collection.find(
+        {"username": {"$in": usernames}},
+        {"_id": 0, "username": 1, "name": 1, "profile_image": 1}
+    ))
+
+    return users
+
+# 🛑 Agora 음성채팅 퇴장 API
+@app.post("/rooms/{room_id}/agora-leave")
+def leave_agora_channel(room_id: str, user: dict = Depends(get_current_user)):
+    if room_id in active_agora_users:
+        active_agora_users[room_id].discard(user["username"])
+
+    return {"msg": "Agora 음성채팅 퇴장 처리 완료"}
+
+# 🕐 방별 통화 시작 시간 저장
+agora_call_start_times = {}
+
+
+
+# ⏱ 통화 시간 조회 API
+@app.get("/rooms/{room_id}/call-duration")
+def get_call_duration(room_id: str):
+    if room_id not in agora_call_start_times:
+        return {"duration_seconds": 0}
+
+    start_time = agora_call_start_times[room_id]
+    duration = (datetime.utcnow() - start_time).total_seconds()
+
+    return {"duration_seconds": int(duration)}
+
+
+room_wake_results_saved = set()
+
+# 🎯 join 시 최초 1회 통화 시작 시간 기록
+@app.post("/rooms/{room_id}/agora-join")
+def join_agora_channel(room_id: str, user: dict = Depends(get_current_user)):
+    if room_id not in active_agora_users:
+        active_agora_users[room_id] = set()
+
+    active_agora_users[room_id].add(user["username"])
+
+    if room_id not in agora_call_start_times:
+        agora_call_start_times[room_id] = datetime.utcnow()
+        Timer(30, evaluate_room_wake_result, args=[room_id]).start()
+
+    return {"msg": "Agora 음성채팅 입장 기록 완료"}
+
+
+def evaluate_room_wake_result(room_id: str):
+    if room_id in room_wake_results_saved:
+        return
+
+    room = rooms_collection.find_one({"room_id": room_id})
+    if not room:
+        return
+
+    expected_participants = room.get("participants", [])
+    actual_participants = active_agora_users.get(room_id, [])
+
+    all_joined = set(expected_participants) == set(actual_participants)
+
+    for username in expected_participants:
+        wake_records_collection.update_one(
+            {"username": username, "date": room["wake_date"]},
+            {
+                "$set": {
+                    "username": username,
+                    "date": room["wake_date"],
+                    "success": all_joined,
+                    "type": "모닝방",
+                    "wake_time": room["wake_time"],
+                    "reason": "그룹 기상",
+                    "participants": expected_participants
+                }
+            },
+            upsert=True
+        )
+
+    room_wake_results_saved.add(room_id)
+    print(f"[AUTO SAVE] {room_id}: {'성공' if all_joined else '실패'}")
