@@ -1,4 +1,4 @@
-from fastapi import FastAPI, HTTPException, Depends, Path, Query
+from fastapi import FastAPI, HTTPException, Depends, Path, Query, Body
 from pydantic import BaseModel
 from pymongo import MongoClient
 from passlib.context import CryptContext
@@ -13,7 +13,6 @@ import json
 from typing import List
 import pytz
 from agora_token_builder import RtcTokenBuilder
-
 
 # 앱 생성
 app = FastAPI()
@@ -634,3 +633,20 @@ def get_my_friends(user: dict = Depends(get_current_user)):
     ))
 
     return friends
+
+
+# 친구 삭제제
+@app.post("/me/friends/remove")
+def remove_friend(
+    friend_username: str = Body(...), 
+    user: dict = Depends(get_current_user)
+):
+    username = user["username"]
+
+    # 조용히 처리: 친구 목록에 없어도 그냥 OK 처리
+    users_collection.update_one(
+        {"username": username},
+        {"$pull": {"friends": friend_username}}
+    )
+
+    return {"msg": f"{friend_username}님을 친구 목록에서 제거했습니다."}
