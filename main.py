@@ -36,6 +36,7 @@ db = client["morning_db"]
 users_collection = db["users"]
 rooms_collection = db["morning_rooms"]
 wake_records_collection = db["wake_records"]
+wake_requests_collection = db["wake_requests"]
 
 
 # JWT 토큰 생성 함수
@@ -112,6 +113,26 @@ class WakeRecord(BaseModel):
     wake_time: str       # 목표 기상 시간: "08:00"
     reason: str          # 기상 이유: 자유 텍스트
     participants: List[str]  # 함께한 사람들 ID 리스트
+
+# 모닝콜 요청
+class WakeRequestCreate(BaseModel):
+    wake_date: str         # "2025-04-07"
+    wake_time: str         # "08:30"
+    reason: str            # 이유
+    is_public: bool        # 공개 여부 (true/false)
+
+# 모닝콜 요청 리스트
+class WakeRequest(BaseModel):
+    request_id: str
+    requester: str
+    wake_date: str
+    wake_time: str
+    reason: str
+    is_public: bool
+    accepted_by: str | None = None
+    status: str = "open"  # open, accepted, done
+    created_at: str
+
 
 
 # 회원가입 API
@@ -359,3 +380,92 @@ def get_wake_summary(user: dict = Depends(get_current_user)):
         {"date": rec["date"], "success": rec["success"]}
         for rec in records
     ]
+
+# 모닝콜 요청 게시 API
+@app.post("/wake-requests")
+def create_wake_request(req: WakeRequestCreate, user: dict = Depends(get_current_user)):
+    kst = pytz.timezone("Asia/Seoul")
+    now = datetime.now(kst)
+
+    request_data = WakeRequest(
+        request_id=str(uuid4())[:8],
+        requester=user["username"],
+        wake_date=req.wake_date,
+        wake_time=req.wake_time,
+        reason=req.reason,
+        is_public=req.is_public,
+        created_at=now.isoformat()
+    ).dict()
+
+    wake_requests_collection.insert_one(request_data)
+    return {"msg": "모닝콜 요청 등록 완료!", "request_id": request_data["request_id"]}
+
+
+# 모닝콜 요청 리스트 조회 API
+@app.get("/wake-requests")
+def list_wake_requests(user: dict = Depends(get_current_user)):
+    kst = pytz.timezone("Asia/Seoul")
+    now = datetime.now(kst)
+
+    # 상태 관계없이 전체 요청 가져오기
+    requests = list(wake_requests_collection.find().sort("wake_date", 1))
+
+    result = []
+    for req in requests:
+        # ⏱ 유효기간 지난 "open" 요청 자동 만료 처리
+        wake_dt = kst.localize(datetime.strptime(f"{req['wake_date']} {req['wake_time']}", "%Y-%m-%d %H:%M"))
+        if now > wake_dt and req["status"] == "open":
+            wake_requests_collection.update_one(
+                {"request_id": req["request_id"]},
+                {"$set": {"status": "expired"}}
+            )
+            req["status"] = "expired"
+
+        # 프론트가 보기 쉽게 open 상태만 보여주기
+        if req["status"] != "open":
+            continue
+
+        # reason 공개 여부 처리
+        reason = (
+            req["reason"] if req["is_public"] or req["requester"] == user["username"]
+            else "비공개"
+        )
+
+        result.append({
+            "request_id": req["request_id"],
+            "requester": req["requester"],
+            "wake_date": req["wake_date"],
+            "wake_time": req["wake_time"],
+            "reason": reason,
+            "is_public": req["is_public"],
+            "accepted_by": req.get("accepted_by"),
+            "status": req["status"]
+        })
+
+    return result
+
+
+# 모닝콜 요청 수락 API
+@app.post("/wake-requests/{request_id}/accept")
+def accept_wake_request(request_id: str, user: dict = Depends(get_current_user)):
+    req = wake_requests_collection.find_one({"request_id": request_id})
+    if not req:
+        raise HTTPException(status_code=404, detail="요청을 찾을 수 없습니다.")
+
+    if req["status"] != "open":
+        raise HTTPException(status_code=400, detail="이미 수락된 요청입니다.")
+
+    if req["requester"] == user["username"]:
+        raise HTTPException(status_code=400, detail="자기 자신의 요청은 수락할 수 없습니다.")
+
+    wake_requests_collection.update_one(
+        {"request_id": request_id},
+        {
+            "$set": {
+                "accepted_by": user["username"],
+                "status": "accepted"
+            }
+        }
+    )
+
+    return {"msg": "모닝콜 요청을 수락했습니다!"}
