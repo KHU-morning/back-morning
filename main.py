@@ -10,7 +10,8 @@ from datetime import datetime, timedelta
 from fastapi import WebSocket, WebSocketDisconnect
 from fastapi.encoders import jsonable_encoder
 import json
-
+from typing import List
+import pytz
 
 
 # 앱 생성
@@ -34,6 +35,8 @@ db = client["morning_db"]
 # 컬렉션 정의
 users_collection = db["users"]
 rooms_collection = db["morning_rooms"]
+wake_records_collection = db["wake_records"]
+
 
 # JWT 토큰 생성 함수
 def create_access_token(data: dict, expires_delta: timedelta = None):
@@ -100,6 +103,16 @@ class ChatMessage(BaseModel):
 # (현재 미사용) 모닝방 참여 요청용
 class JoinRoomRequest(BaseModel):
     username: str
+
+# 마이페이지 기상 기록
+class WakeRecord(BaseModel):
+    date: str            # 날짜: "2025-04-03"
+    success: bool        # 성공 여부: True or False
+    type: str            # "모닝방" / "모닝콜" / "혼자 기상"
+    wake_time: str       # 목표 기상 시간: "08:00"
+    reason: str          # 기상 이유: 자유 텍스트
+    participants: List[str]  # 함께한 사람들 ID 리스트
+
 
 # 회원가입 API
 # 회원가입 정보 (username, password 등)를 받아 DB에 저장
@@ -189,9 +202,10 @@ def get_room_detail(room_id: str = Path(...)):
         raise HTTPException(status_code=404, detail="모닝방을 찾을 수 없습니다.")
 
     # ⏱ 기상 시간 계산 (이전 코드 그대로 유지)
-    now = datetime.utcnow()
+    kst = pytz.timezone("Asia/Seoul")
+    now = datetime.now(kst)
     try:
-        target_dt = datetime.strptime(f"{room['wake_date']} {room['wake_time']}", "%Y-%m-%d %H:%M")
+        target_dt = kst.localize(datetime.strptime(f"{room['wake_date']} {room['wake_time']}", "%Y-%m-%d %H:%M"))
         diff = target_dt - now
         minutes_left = int(diff.total_seconds() // 60)
 
@@ -276,6 +290,7 @@ manager = ConnectionManager()
 
 @app.websocket("/ws/{room_id}")
 async def websocket_endpoint(websocket: WebSocket, room_id: str):
+    kst = pytz.timezone("Asia/Seoul")
     await websocket.accept()
 
     # 🔐 username을 query로 전달받기 (예: /ws/abcd1234?username=hgd123)
@@ -303,7 +318,7 @@ async def websocket_endpoint(websocket: WebSocket, room_id: str):
             if user:
                 data["profile_image"] = user.get("profile_image", "")
 
-            data["timestamp"] = datetime.now().strftime("%Y-%m-%d %H:%M")
+            data["timestamp"] = datetime.now(kst).strftime("%Y-%m-%d %H:%M")
             await manager.broadcast(room_id, json.dumps(data))
 
     except WebSocketDisconnect:
@@ -316,3 +331,31 @@ async def websocket_endpoint(websocket: WebSocket, room_id: str):
             "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M")
         }
         await manager.broadcast(room_id, json.dumps(leave_msg))
+
+
+
+# 날짜별 기록 조회 API (달력 눌렀을 때)
+@app.get("/me/wake-record/{date}")
+def get_wake_record(date: str, user: dict = Depends(get_current_user)):
+    record = wake_records_collection.find_one({"username": user["username"], "date": date})
+    if not record:
+        raise HTTPException(status_code=404, detail="기상 기록이 없습니다.")
+    
+    return {
+        "date": record["date"],
+        "success": record["success"],
+        "type": record["type"],
+        "wake_time": record["wake_time"],
+        "reason": record["reason"],
+        "participants": record.get("participants", [])
+    }
+
+# 날짜별 기록 조회 API (달력 색칠용)
+@app.get("/me/wake-records")
+def get_wake_summary(user: dict = Depends(get_current_user)):
+    records = list(wake_records_collection.find({"username": user["username"]}))
+    
+    return [
+        {"date": rec["date"], "success": rec["success"]}
+        for rec in records
+    ]
