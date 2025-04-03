@@ -259,7 +259,6 @@ class ConnectionManager:
         self.active_connections: dict[str, list[WebSocket]] = {}
 
     async def connect(self, room_id: str, websocket: WebSocket):
-        await websocket.accept()
         if room_id not in self.active_connections:
             self.active_connections[room_id] = []
         self.active_connections[room_id].append(websocket)
@@ -274,14 +273,23 @@ class ConnectionManager:
 
 manager = ConnectionManager()
 
+
 @app.websocket("/ws/{room_id}")
 async def websocket_endpoint(websocket: WebSocket, room_id: str):
+    await websocket.accept()
+
+    # 🔐 username을 query로 전달받기 (예: /ws/abcd1234?username=hgd123)
+    username = websocket.query_params.get("username")
+
+    user = users_collection.find_one({"username": username})
+    name = user["name"] if user else "알 수 없음"
+
     await manager.connect(room_id, websocket)
 
     # 👉 입장 메시지 전송
     join_msg = {
         "type": "system",
-        "message": "누군가 입장했습니다 👋",
+        "message": f"{name}({username}) 님이 입장했습니다 👋",
         "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M")
     }
     await manager.broadcast(room_id, json.dumps(join_msg))
@@ -291,18 +299,20 @@ async def websocket_endpoint(websocket: WebSocket, room_id: str):
             raw_data = await websocket.receive_text()
             data = json.loads(raw_data)
 
-            # ⏱ timestamp 추가
-            data["timestamp"] = datetime.now().strftime("%Y-%m-%d %H:%M")
+            # 프로필 이미지 추가
+            if user:
+                data["profile_image"] = user.get("profile_image", "")
 
+            data["timestamp"] = datetime.now().strftime("%Y-%m-%d %H:%M")
             await manager.broadcast(room_id, json.dumps(data))
 
     except WebSocketDisconnect:
-        manager.disconnect(room_id, websocket)
+        await manager.disconnect(room_id, websocket)
 
         # 👉 퇴장 메시지 전송
         leave_msg = {
             "type": "system",
-            "message": "누군가 퇴장했습니다 👋",
+            "message": f"{name}({username}) 님이 퇴장했습니다 👋",
             "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M")
         }
         await manager.broadcast(room_id, json.dumps(leave_msg))
