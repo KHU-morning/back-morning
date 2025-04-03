@@ -497,3 +497,56 @@ def get_wake_request_detail(request_id: str, user: dict = Depends(get_current_us
         "target": target_info,  # 👈 프론트에선 "기상 대상"으로 사용
         "you_are_helper": user["username"] == req.get("accepted_by")
     }
+
+
+# 전화 성공 실패 여부 저장 API
+@app.post("/wake-requests/{request_id}/result")
+def record_wake_result(
+    request_id: str,
+    success: bool = Query(...),
+    user: dict = Depends(get_current_user)
+):
+    req = wake_requests_collection.find_one({"request_id": request_id})
+    if not req:
+        raise HTTPException(status_code=404, detail="요청을 찾을 수 없습니다.")
+
+    # 수락자 본인만 기록 가능
+    if req.get("accepted_by") != user["username"]:
+        raise HTTPException(status_code=403, detail="기록 권한이 없습니다.")
+
+    # 중복 저장 방지
+    if req.get("wake_recorded"):
+        raise HTTPException(status_code=400, detail="이미 기상 기록이 저장되었습니다.")
+
+    # 요청자 정보 가져오기
+    requester = users_collection.find_one({"username": req["requester"]})
+    if not requester:
+        raise HTTPException(status_code=404, detail="요청자 정보를 찾을 수 없습니다.")
+
+    # wake_records 저장
+    wake_records_collection.update_one(
+        {"username": requester["username"], "date": req["wake_date"]},
+        {
+            "$set": {
+                "username": requester["username"],
+                "date": req["wake_date"],
+                "success": success,
+                "type": "모닝콜",
+                "wake_time": req["wake_time"],
+                "reason": req["reason"],
+                "participants": [user["username"]]
+            }
+        },
+        upsert=True
+    )
+
+    # 상태 표시
+    wake_requests_collection.update_one(
+        {"request_id": request_id},
+        {"$set": {"wake_recorded": True}}
+    )
+
+    return {
+        "msg": "기상 기록 저장 완료!",
+        "success": success
+    }
