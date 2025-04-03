@@ -621,3 +621,16 @@ def rate_user(rating: RatingRequest, user: dict = Depends(get_current_user)):
     })
 
     return {"msg": "평가 완료!"}
+
+
+# 마이페이지 친구 조회
+@app.get("/me/friends")
+def get_my_friends(user: dict = Depends(get_current_user)):
+    friend_usernames = user.get("friends", [])
+
+    friends = list(users_collection.find(
+        {"username": {"$in": friend_usernames}},
+        {"_id": 0, "username": 1, "name": 1, "department": 1, "profile_image": 1}
+    ))
+
+    return friends
