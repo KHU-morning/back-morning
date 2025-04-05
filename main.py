@@ -1,4 +1,5 @@
 from fastapi import FastAPI, HTTPException, Depends, Path, Query, Body, BackgroundTasks
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 from pymongo import MongoClient
 from passlib.context import CryptContext
@@ -10,8 +11,7 @@ from datetime import datetime, timedelta
 from fastapi import WebSocket, WebSocketDisconnect
 from fastapi.encoders import jsonable_encoder
 import json
-from typing import List
-from fastapi.responses import JSONResponse
+from typing import List, Literal
 import pytz
 from agora_token_builder import RtcTokenBuilder
 from threading import Timer
@@ -24,12 +24,11 @@ app = FastAPI()
 # MongoDB Atlas 클러스터 연결
 client = MongoClient("mongodb+srv://jegalhhh:1234@morning-cluster.rjlkphg.mongodb.net/?retryWrites=true&w=majority&appName=morning-cluster")
 db = client["morning_db"]
-url = 'http://localhost:13902/'
 
 # CORS 허용 설정
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # 또는 ["http://localhost:5000"]
+    allow_origins=["*"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -114,7 +113,7 @@ class WakeRequest(BaseModel):
     reason: str
     is_public: bool
     accepted_by: str | None = None
-    status: str = "open"  # open, accepted, done
+    status: Literal["open", "accepted", "expired"] = "open"  # open, accepted, expired
     created_at: str
 
 # 평가 요청 모델
@@ -206,13 +205,25 @@ def get_my_profile(user: dict = Depends(get_current_user)):
     }
 
 # 마이페이지 친구 조회
-@app.get("/me/friends")
+@app.get("/me/friends_names")
 def get_my_friends(user: dict = Depends(get_current_user)):
     friend_usernames = user.get("friends", [])
 
     friends = list(users_collection.find(
         {"username": {"$in": friend_usernames}},
         {"_id": 0, "username": 1, "name": 1, "department": 1, "profile_image": 1}
+    ))
+
+    return friends
+
+# 모닝방 내 방 입장한 친구들 정보보
+@app.get("/me/friends", response_model=List[dict])
+def get_all_friend_data(user: dict = Depends(get_current_user)):
+    friend_usernames = user.get("friends", [])
+
+    friends = list(users_collection.find(
+        {"username": {"$in": friend_usernames}},
+        {"_id": 0}  # `_id` 제외하고 모든 필드 반환
     ))
 
     return friends
@@ -386,7 +397,8 @@ def list_public_rooms():
             "title": room["title"],  
             "created_by": room["created_by"],
             "wake_date": room["wake_date"],
-            "wake_time": room["wake_time"]
+            "wake_time": room["wake_time"],
+            "participants": room.get("participants", [])
         })
 
     return result
