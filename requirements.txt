@@ -1,0 +1,9 @@
+fastapi
+uvicorn[standard]
+pymongo
+passlib[bcrypt]
+python-jose
+python-multipart
+pytz
+python-dotenv
+agora-token-builder
