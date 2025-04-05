@@ -1,0 +1,12 @@
+name: back-morning
+app: python
+build:
+  envs:
+    - key: PIP_NO_CACHE_DIR
+      value: 'false'
+run:
+  command: uvicorn main:app --host 0.0.0.0 --port 8000
+  port: 8000
+  envs:
+    - key: MONGO_URL
+      value: mongodb+srv://jegalhhh:1234@morning-cluster.rjlkphg.mongodb.net/?retryWrites=true&w=majority

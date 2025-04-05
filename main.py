@@ -3,7 +3,6 @@ from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 from pymongo import MongoClient
 from passlib.context import CryptContext
-from pydantic import BaseModel
 from uuid import uuid4
 from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm
 from jose import JWTError, jwt
@@ -11,19 +10,21 @@ from datetime import datetime, timedelta
 from fastapi import WebSocket, WebSocketDisconnect
 from fastapi.encoders import jsonable_encoder
 import json
-from typing import List, Literal
+from typing import List
+from fastapi.responses import JSONResponse
 import pytz
+
 from agora_token_builder import RtcTokenBuilder
 from threading import Timer
 from fastapi.middleware.cors import CORSMiddleware
 
-
-
-# 앱 생성
+# ✅ 앱 생성
 app = FastAPI()
-# MongoDB Atlas 클러스터 연결
-client = MongoClient("mongodb+srv://jegalhhh:1234@morning-cluster.rjlkphg.mongodb.net/?retryWrites=true&w=majority&appName=morning-cluster")
+
+# ✅ MongoDB 직접 연결 (환경변수 없이 간단하게!)
+client = MongoClient("mongodb+srv://jegalhhh:1234@morning-cluster.rjlkphg.mongodb.net/?retryWrites=true&w=majority")
 db = client["morning_db"]
+url = 'http://localhost:13902/'
 
 # CORS 허용 설정
 app.add_middleware(
@@ -905,3 +906,7 @@ def get_agora_token(channel_name: str, user_id: int, user: dict = Depends(get_cu
         "uid": user_id,
         "token": token
     }
+
+@app.get("/")
+def root():
+    return {"message": "Server is running!"}
