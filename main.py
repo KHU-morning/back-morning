@@ -11,9 +11,11 @@ from fastapi import WebSocket, WebSocketDisconnect
 from fastapi.encoders import jsonable_encoder
 import json
 from typing import List
+from fastapi.responses import JSONResponse
 import pytz
 from agora_token_builder import RtcTokenBuilder
 from threading import Timer
+from fastapi.middleware.cors import CORSMiddleware
 
 
 
@@ -22,6 +24,16 @@ app = FastAPI()
 # MongoDB Atlas 클러스터 연결
 client = MongoClient("mongodb+srv://jegalhhh:1234@morning-cluster.rjlkphg.mongodb.net/?retryWrites=true&w=majority&appName=morning-cluster")
 db = client["morning_db"]
+url = 'http://localhost:13902/'
+
+# CORS 허용 설정
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],  # 또는 ["http://localhost:5000"]
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 # JWT 관련 상수 및 암호화 설정
 SECRET_KEY = "super-secret-kyunghee-morning123!"  # 실제 서비스에서는 환경변수로 관리
@@ -142,6 +154,10 @@ async def get_current_user(token: str = Depends(oauth2_scheme)):
         raise credentials_exception
 
     return user
+
+@app.get("/users")
+def get_all_users():
+    return list(users_collection.find({}, {"_id": 0, "username": 1, "name": 1}))
 
 
 
@@ -877,17 +893,3 @@ def get_agora_token(channel_name: str, user_id: int, user: dict = Depends(get_cu
         "uid": user_id,
         "token": token
     }
-
-
-
-
-
-
-
-
-
-
-
-
-
-
