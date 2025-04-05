@@ -12,23 +12,19 @@ from typing import List
 from fastapi.responses import JSONResponse
 import json
 import pytz
-import os  # ✅ 환경변수를 쓰기 위한 os
-from dotenv import load_dotenv  # 로컬 개발용 .env 지원
 
 from agora_token_builder import RtcTokenBuilder
 from threading import Timer
 from fastapi.middleware.cors import CORSMiddleware
 
-# ✅ 로컬 개발 시 .env 파일 로딩 (.env 파일은 GitHub에 올리지 마!)
-load_dotenv()
-
-# 앱 생성
+# ✅ 앱 생성
 app = FastAPI()
 
-# ✅ MongoDB Atlas 연결 (Cloudtype에서는 MONGO_URL을 환경변수로 설정)
-MONGO_URL = os.environ["MONGO_URL"]
-client = MongoClient(MONGO_URL)
+# ✅ MongoDB 직접 연결 (환경변수 없이 간단하게!)
+client = MongoClient("mongodb+srv://jegalhhh:1234@morning-cluster.rjlkphg.mongodb.net/?retryWrites=true&w=majority")
 db = client["morning_db"]
+
+
 
 url = 'http://localhost:13902/'
 
@@ -899,3 +895,7 @@ def get_agora_token(channel_name: str, user_id: int, user: dict = Depends(get_cu
         "uid": user_id,
         "token": token
     }
+
+@app.get("/")
+def root():
+    return {"message": "Server is running!"}
